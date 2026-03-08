@@ -1,0 +1,109 @@
+---
+description: Use when deploying this Next.js project to the Tencent Lighthouse server, or when the user mentions "部署", "deploy", "上线", "发布".
+alwaysApply: false
+enabled: true
+updatedAt: 2026-03-07T14:24:13.727Z
+provider: 
+---
+
+# Deploy to Lighthouse
+
+## Overview
+
+Deploy this Next.js landing page as a static site to the Tencent Lighthouse instance via nginx.
+
+**Core principle:** Static export + upload to nginx directory. No Docker needed.
+
+## Target Server
+
+- **Region**: `ap-tokyo`
+- **Instance ID**: `lhins-rnb0b25d`
+- **Public IP**: `43.163.201.189`
+- **Deploy path**: `/var/www/html/amazing/`
+- **Access URL**: `http://43.163.201.189/amazing/`
+
+## Prerequisites
+
+- `next.config.ts` must have `output: "export"` and `basePath: "/amazing"`
+- Lighthouse integration must be connected
+
+## Deployment Steps
+
+### Step 1: Verify next.config.ts
+
+Ensure these fields are set:
+
+```ts
+const nextConfig: NextConfig = {
+  output: "export",
+  basePath: "/amazing",
+  // ...other config
+};
+```
+
+### Step 2: Build
+
+```bash
+cd /Users/chaoluo/Documents/work/landpage && npm run build
+```
+
+This generates the `out/` directory with static HTML/CSS/JS.
+
+### Step 3: Upload to server
+
+Use Lighthouse `deploy_project_preparation` tool:
+
+```
+FolderPath: /Users/chaoluo/Documents/work/landpage/out
+InstanceId: lhins-rnb0b25d
+Region: ap-tokyo
+ProjectName: amazing
+```
+
+Note the returned server path (e.g. `/root/out_YYYYMMDDHHMMSS`).
+
+### Step 4: Copy to nginx directory and reload
+
+Use Lighthouse `execute_command`:
+
+```bash
+rm -rf /var/www/html/amazing/* && cp -r /root/out_<timestamp>/* /var/www/html/amazing/ && nginx -s reload
+```
+
+### Step 5: Verify
+
+Use Lighthouse `execute_command`:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}' http://localhost/amazing/
+```
+
+Should return `200`.
+
+### Step 6: Mark complete
+
+Call Lighthouse `deploy_success`:
+
+```
+InstanceName: Ubuntu
+InstanceId: lhins-rnb0b25d
+URL: http://43.163.201.189/amazing/
+```
+
+## Local Development Note
+
+`basePath: "/amazing"` affects local dev — localhost will require `/amazing` path prefix. To develop locally, temporarily comment out `basePath` or run:
+
+```bash
+next dev
+# then visit http://localhost:3000/amazing
+```
+
+## Troubleshooting
+
+| Issue | Fix |
+|-------|-----|
+| 404 on assets | Check `basePath` matches deploy directory name |
+| 403 on page | Check file permissions: `chmod -R 755 /var/www/html/amazing/` |
+| Stale content | Ensure `rm -rf` ran before `cp -r` |
+| nginx error | Run `nginx -t` to check config syntax |
