@@ -1,13 +1,12 @@
 "use client";
 
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { useState, useEffect, useRef, useCallback } from "react";
 
 interface ChatPair {
   question: string;
   featureTitle: string;
   answer: string;
-  icon: string;
   accent: string;
 }
 
@@ -17,7 +16,6 @@ const CHAT_PAIRS: ChatPair[] = [
     featureTitle: "WIP Report",
     answer:
       "Here's your WIP report for March 2026. You have 14 active jobs with $2.3M in costs to date. 3 jobs are over-billed by a combined $180K — I've flagged them for review.",
-    icon: "📊",
     accent: "from-blue-500/20 to-cyan-500/10",
   },
   {
@@ -25,7 +23,6 @@ const CHAT_PAIRS: ChatPair[] = [
     featureTitle: "Cash Flow Forecast",
     answer:
       "Based on current AR/AP aging and projected billings, you'll have a $340K shortfall in Week 6. I recommend accelerating billing on the Riverside project — $215K is ready to invoice.",
-    icon: "💰",
     accent: "from-emerald-500/20 to-teal-500/10",
   },
   {
@@ -33,7 +30,6 @@ const CHAT_PAIRS: ChatPair[] = [
     featureTitle: "Anomaly Detection",
     answer:
       "3 jobs have margin erosion > 5%: Highway 101 Bridge (-8.2%), Downtown Office TI (-6.1%), and Marina Seawall (-5.4%). Primary driver: labor cost overruns on change orders not yet approved.",
-    icon: "🚨",
     accent: "from-rose-500/20 to-red-500/10",
   },
   {
@@ -41,7 +37,6 @@ const CHAT_PAIRS: ChatPair[] = [
     featureTitle: "Divisional P&L",
     answer:
       "Commercial division leads at 12.3% net margin ($1.8M revenue). Residential is at 8.1% — down from 9.4% last quarter. Civil is breaking even due to the delayed Highway 101 project.",
-    icon: "📈",
     accent: "from-purple-500/20 to-pink-500/10",
   },
 ];
@@ -66,162 +61,167 @@ function ThinkingDots() {
           key={i}
           className="w-2 h-2 rounded-full bg-blue-400/60"
           animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1, 0.8] }}
-          transition={{
-            duration: 1,
-            repeat: Infinity,
-            delay: i * 0.2,
-          }}
+          transition={{ duration: 1, repeat: Infinity, delay: i * 0.2 }}
         />
       ))}
     </div>
   );
 }
 
-/* ── Phase state machine for each conversation pair ── */
-type Phase =
-  | "idle"
-  | "typing-question"
-  | "question-done"
-  | "thinking"
-  | "typing-answer"
-  | "answer-done"
-  | "finished";
+/* Message type for the flat message list */
+type Message =
+  | { type: "welcome" }
+  | { type: "user"; text: string; typing?: boolean }
+  | { type: "thinking" }
+  | { type: "ai"; text: string; featureTitle: string; accent: string; typing?: boolean };
 
 export default function ChatFeatures() {
-  const [visiblePairs, setVisiblePairs] = useState(0); // how many pairs have started
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [questionText, setQuestionText] = useState("");
-  const [answerText, setAnswerText] = useState("");
-  const [completedPairs, setCompletedPairs] = useState<
-    { question: string; answer: string; featureTitle: string; icon: string; accent: string }[]
-  >([]);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [pairIndex, setPairIndex] = useState(0);
+  const [phase, setPhase] = useState<"idle" | "typing-q" | "pause-q" | "thinking" | "typing-a" | "pause-a" | "done">("idle");
+  const [typingText, setTypingText] = useState("");
+  const chatRef = useRef<HTMLDivElement>(null);
   const sectionRef = useRef<HTMLDivElement>(null);
   const [hasStarted, setHasStarted] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Auto scroll to bottom of chat
   const scrollToBottom = useCallback(() => {
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTo({
-        top: chatContainerRef.current.scrollHeight,
-        behavior: "smooth",
-      });
+    if (chatRef.current) {
+      chatRef.current.scrollTo({ top: chatRef.current.scrollHeight, behavior: "smooth" });
     }
   }, []);
 
-  // Start animation when section enters viewport
+  // Observe viewport
   useEffect(() => {
     if (!sectionRef.current) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting && !hasStarted) {
-          setHasStarted(true);
-        }
-      },
+    const obs = new IntersectionObserver(
+      ([e]) => { if (e.isIntersecting && !hasStarted) setHasStarted(true); },
       { threshold: 0.3 }
     );
-    observer.observe(sectionRef.current);
-    return () => observer.disconnect();
+    obs.observe(sectionRef.current);
+    return () => obs.disconnect();
   }, [hasStarted]);
 
-  // Kick off first pair once started
+  // Start: add welcome + begin first question
   useEffect(() => {
-    if (hasStarted && visiblePairs === 0) {
-      setVisiblePairs(1);
-      setPhase("typing-question");
-    }
-  }, [hasStarted, visiblePairs]);
+    if (!hasStarted || phase !== "idle") return;
+    setMessages([{ type: "welcome" }]);
+    const t = setTimeout(() => {
+      setPhase("typing-q");
+    }, 600);
+    return () => clearTimeout(t);
+  }, [hasStarted, phase]);
 
-  // Type the question character by character
+  // Phase: typing question
   useEffect(() => {
-    if (phase !== "typing-question") return;
-    const pair = CHAT_PAIRS[visiblePairs - 1];
+    if (phase !== "typing-q") return;
+    const pair = CHAT_PAIRS[pairIndex];
     if (!pair) return;
+
+    // Add a user bubble placeholder
+    setMessages((prev) => [...prev, { type: "user", text: "", typing: true }]);
+    setTypingText("");
+
     let i = 0;
-    setQuestionText("");
     timerRef.current = setInterval(() => {
       i++;
-      setQuestionText(pair.question.slice(0, i));
+      const text = pair.question.slice(0, i);
+      setTypingText(text);
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1] = { type: "user", text, typing: true };
+        return updated;
+      });
       if (i >= pair.question.length) {
         if (timerRef.current) clearInterval(timerRef.current);
-        setPhase("question-done");
+        // Finalize: remove typing flag
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = { type: "user", text: pair.question };
+          return updated;
+        });
+        setPhase("pause-q");
       }
     }, 30);
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [phase, visiblePairs]);
 
-  // After question done → show thinking for ~1.2s
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [phase, pairIndex]);
+
+  // Phase: pause after question → show thinking
   useEffect(() => {
-    if (phase !== "question-done") return;
-    const t = setTimeout(() => setPhase("thinking"), 300);
+    if (phase !== "pause-q") return;
+    const t = setTimeout(() => {
+      setMessages((prev) => [...prev, { type: "thinking" }]);
+      setPhase("thinking");
+    }, 300);
     return () => clearTimeout(t);
   }, [phase]);
 
+  // Phase: thinking → start typing answer
   useEffect(() => {
     if (phase !== "thinking") return;
-    const t = setTimeout(() => setPhase("typing-answer"), 1200);
+    const t = setTimeout(() => {
+      // Replace thinking with AI bubble
+      const pair = CHAT_PAIRS[pairIndex];
+      setMessages((prev) => {
+        const updated = [...prev];
+        // Remove the thinking message
+        updated[updated.length - 1] = { type: "ai", text: "", featureTitle: pair.featureTitle, accent: pair.accent, typing: true };
+        return updated;
+      });
+      setPhase("typing-a");
+    }, 1200);
     return () => clearTimeout(t);
-  }, [phase]);
+  }, [phase, pairIndex]);
 
-  // Type the answer character by character
+  // Phase: typing answer
   useEffect(() => {
-    if (phase !== "typing-answer") return;
-    const pair = CHAT_PAIRS[visiblePairs - 1];
+    if (phase !== "typing-a") return;
+    const pair = CHAT_PAIRS[pairIndex];
     if (!pair) return;
+
     let i = 0;
-    setAnswerText("");
     timerRef.current = setInterval(() => {
       i++;
-      setAnswerText(pair.answer.slice(0, i));
+      const text = pair.answer.slice(0, i);
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1] = { type: "ai", text, featureTitle: pair.featureTitle, accent: pair.accent, typing: true };
+        return updated;
+      });
       if (i >= pair.answer.length) {
         if (timerRef.current) clearInterval(timerRef.current);
-        setPhase("answer-done");
+        // Finalize
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = { type: "ai", text: pair.answer, featureTitle: pair.featureTitle, accent: pair.accent };
+          return updated;
+        });
+        setPhase("pause-a");
       }
     }, 15);
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [phase, visiblePairs]);
 
-  // After answer done → archive this pair and start next (or loop)
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [phase, pairIndex]);
+
+  // Phase: pause after answer → next pair or done
   useEffect(() => {
-    if (phase !== "answer-done") return;
-    const pair = CHAT_PAIRS[visiblePairs - 1];
+    if (phase !== "pause-a") return;
     const t = setTimeout(() => {
-      setCompletedPairs((prev) => [
-        ...prev,
-        {
-          question: pair.question,
-          answer: pair.answer,
-          featureTitle: pair.featureTitle,
-          icon: pair.icon,
-          accent: pair.accent,
-        },
-      ]);
-      if (visiblePairs < CHAT_PAIRS.length) {
-        setVisiblePairs((v) => v + 1);
-        setPhase("typing-question");
-        setQuestionText("");
-        setAnswerText("");
+      if (pairIndex < CHAT_PAIRS.length - 1) {
+        setPairIndex((i) => i + 1);
+        setPhase("typing-q");
       } else {
-        // All done — stop, no loop
-        setPhase("finished");
+        setPhase("done");
       }
-    }, 1000);
+    }, 800);
     return () => clearTimeout(t);
-  }, [phase, visiblePairs]);
+  }, [phase, pairIndex]);
 
-  // Auto-scroll whenever content changes
+  // Auto-scroll
   useEffect(() => {
     scrollToBottom();
-  }, [questionText, answerText, completedPairs, phase, scrollToBottom]);
-
-  const isFinished = phase === "finished";
-
-  const currentPair = visiblePairs > 0 ? CHAT_PAIRS[visiblePairs - 1] : null;
+  }, [messages, typingText, scrollToBottom]);
 
   return (
     <section
@@ -281,67 +281,21 @@ export default function ChatFeatures() {
             <div className="w-12" />
           </div>
 
-          {/* Messages area — scrollable */}
+          {/* Messages area */}
           <div
-            ref={chatContainerRef}
+            ref={chatRef}
             className="p-5 md:p-6 space-y-5 h-[420px] overflow-y-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent"
           >
-            {/* Welcome message */}
-            <AnimatePresence>
-              {hasStarted && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  className="flex justify-start mb-4"
-                >
-                  <div className="max-w-sm rounded-2xl rounded-tl-sm px-4 py-3 bg-white/[0.03] border border-white/[0.06]">
-                    <div className="flex items-center gap-2 mb-2">
-                      <div className="w-5 h-5 rounded-md bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-[10px]">
-                        🤖
-                      </div>
-                      <span className="text-[10px] text-blue-400 font-medium uppercase tracking-wider">
-                        AI CFO
-                      </span>
-                    </div>
-                    <p className="text-sm text-zinc-400">
-                      Hi! I&apos;m connected to your ERP. Ask me anything about
-                      your financials.
-                    </p>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            {/* Completed pairs */}
-            {completedPairs.map((cp, i) => (
-              <div key={`completed-${i}`} className="space-y-4">
-                {/* User bubble */}
-                <motion.div
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className="flex justify-end"
-                >
-                  <div className="max-w-md rounded-2xl rounded-tr-sm px-5 py-3.5 bg-gradient-to-br from-blue-600/20 to-purple-600/20 border border-blue-500/20 backdrop-blur-xl">
-                    <p className="text-sm text-zinc-200 leading-relaxed">
-                      {cp.question}
-                    </p>
-                    <div className="flex items-center justify-end gap-1.5 mt-2">
-                      <span className="text-[10px] text-zinc-500">You</span>
-                      <div className="w-5 h-5 rounded-full bg-gradient-to-br from-zinc-600 to-zinc-700 flex items-center justify-center text-[10px]">
-                        👤
-                      </div>
-                    </div>
-                  </div>
-                </motion.div>
-                {/* AI bubble */}
-                <motion.div
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  className="flex justify-start"
-                >
-                  <div className={`max-w-lg rounded-2xl rounded-tl-sm px-5 py-4 bg-white/[0.02] border border-white/[0.06] relative overflow-hidden`}>
-                    <div className={`absolute inset-0 bg-gradient-to-br ${cp.accent} opacity-30 pointer-events-none`} />
-                    <div className="relative z-10">
+            {messages.map((msg, i) => {
+              if (msg.type === "welcome") {
+                return (
+                  <motion.div
+                    key={`msg-${i}`}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="flex justify-start"
+                  >
+                    <div className="max-w-sm rounded-2xl rounded-tl-sm px-4 py-3 bg-white/[0.03] border border-white/[0.06]">
                       <div className="flex items-center gap-2 mb-2">
                         <div className="w-5 h-5 rounded-md bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-[10px]">
                           🤖
@@ -349,104 +303,98 @@ export default function ChatFeatures() {
                         <span className="text-[10px] text-blue-400 font-medium uppercase tracking-wider">
                           AI CFO
                         </span>
-                        <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full bg-gradient-to-r from-blue-500/10 to-purple-500/10 text-blue-300 border border-blue-500/15">
-                          {cp.featureTitle}
-                        </span>
                       </div>
-                      <p className="text-sm text-zinc-300 leading-relaxed">
-                        {cp.answer}
+                      <p className="text-sm text-zinc-400">
+                        Hi! I&apos;m connected to your ERP. Ask me anything about your financials.
                       </p>
                     </div>
-                  </div>
-                </motion.div>
-              </div>
-            ))}
+                  </motion.div>
+                );
+              }
 
-            {/* Currently typing pair */}
-            <AnimatePresence mode="wait">
-              {currentPair && phase !== "idle" && phase !== "answer-done" && (
-                <div className="space-y-4">
-                  {/* User question typing */}
-                  {(phase === "typing-question" ||
-                    phase === "question-done" ||
-                    phase === "thinking" ||
-                    phase === "typing-answer") && (
-                    <motion.div
-                      initial={{ opacity: 0, x: 20, y: 10 }}
-                      animate={{ opacity: 1, x: 0, y: 0 }}
-                      transition={{ duration: 0.3 }}
-                      className="flex justify-end"
-                    >
-                      <div className="max-w-md rounded-2xl rounded-tr-sm px-5 py-3.5 bg-gradient-to-br from-blue-600/20 to-purple-600/20 border border-blue-500/20 backdrop-blur-xl">
-                        <p className="text-sm text-zinc-200 leading-relaxed">
-                          {questionText}
-                          {phase === "typing-question" && <Cursor />}
-                        </p>
-                        <div className="flex items-center justify-end gap-1.5 mt-2">
-                          <span className="text-[10px] text-zinc-500">You</span>
-                          <div className="w-5 h-5 rounded-full bg-gradient-to-br from-zinc-600 to-zinc-700 flex items-center justify-center text-[10px]">
-                            👤
-                          </div>
+              if (msg.type === "user") {
+                return (
+                  <motion.div
+                    key={`msg-${i}`}
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.25 }}
+                    className="flex justify-end"
+                  >
+                    <div className="max-w-md rounded-2xl rounded-tr-sm px-5 py-3.5 bg-gradient-to-br from-blue-600/20 to-purple-600/20 border border-blue-500/20 backdrop-blur-xl">
+                      <p className="text-sm text-zinc-200 leading-relaxed">
+                        {msg.text}
+                        {msg.typing && <Cursor />}
+                      </p>
+                      <div className="flex items-center justify-end gap-1.5 mt-2">
+                        <span className="text-[10px] text-zinc-500">You</span>
+                        <div className="w-5 h-5 rounded-full bg-gradient-to-br from-zinc-600 to-zinc-700 flex items-center justify-center text-[10px]">
+                          👤
                         </div>
                       </div>
-                    </motion.div>
-                  )}
+                    </div>
+                  </motion.div>
+                );
+              }
 
-                  {/* Thinking dots */}
-                  {phase === "thinking" && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0 }}
-                      className="flex justify-start"
-                    >
-                      <div className="rounded-2xl rounded-tl-sm px-3 py-2 bg-white/[0.02] border border-white/[0.06]">
-                        <div className="flex items-center gap-2 mb-1">
+              if (msg.type === "thinking") {
+                return (
+                  <motion.div
+                    key={`msg-${i}`}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="flex justify-start"
+                  >
+                    <div className="rounded-2xl rounded-tl-sm px-3 py-2 bg-white/[0.02] border border-white/[0.06]">
+                      <div className="flex items-center gap-2 mb-1">
+                        <div className="w-5 h-5 rounded-md bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-[10px]">
+                          🤖
+                        </div>
+                        <span className="text-[10px] text-blue-400 font-medium uppercase tracking-wider">
+                          AI CFO
+                        </span>
+                      </div>
+                      <ThinkingDots />
+                    </div>
+                  </motion.div>
+                );
+              }
+
+              if (msg.type === "ai") {
+                return (
+                  <motion.div
+                    key={`msg-${i}`}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.25 }}
+                    className="flex justify-start"
+                  >
+                    <div className="max-w-lg rounded-2xl rounded-tl-sm px-5 py-4 bg-white/[0.02] border border-white/[0.06] relative overflow-hidden">
+                      <div className={`absolute inset-0 bg-gradient-to-br ${msg.accent} opacity-30 pointer-events-none`} />
+                      <div className="relative z-10">
+                        <div className="flex items-center gap-2 mb-2">
                           <div className="w-5 h-5 rounded-md bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-[10px]">
                             🤖
                           </div>
                           <span className="text-[10px] text-blue-400 font-medium uppercase tracking-wider">
                             AI CFO
                           </span>
+                          <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full bg-gradient-to-r from-blue-500/10 to-purple-500/10 text-blue-300 border border-blue-500/15">
+                            {msg.featureTitle}
+                          </span>
                         </div>
-                        <ThinkingDots />
+                        <p className="text-sm text-zinc-300 leading-relaxed">
+                          {msg.text}
+                          {msg.typing && <Cursor />}
+                        </p>
                       </div>
-                    </motion.div>
-                  )}
+                    </div>
+                  </motion.div>
+                );
+              }
 
-                  {/* AI answer typing */}
-                  {phase === "typing-answer" && (
-                    <motion.div
-                      initial={{ opacity: 0, x: -20, y: 10 }}
-                      animate={{ opacity: 1, x: 0, y: 0 }}
-                      transition={{ duration: 0.3 }}
-                      className="flex justify-start"
-                    >
-                      <div className={`max-w-lg rounded-2xl rounded-tl-sm px-5 py-4 bg-white/[0.02] border border-white/[0.06] relative overflow-hidden`}>
-                        <div className={`absolute inset-0 bg-gradient-to-br ${currentPair.accent} opacity-30 pointer-events-none`} />
-                        <div className="relative z-10">
-                          <div className="flex items-center gap-2 mb-2">
-                            <div className="w-5 h-5 rounded-md bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center text-[10px]">
-                              🤖
-                            </div>
-                            <span className="text-[10px] text-blue-400 font-medium uppercase tracking-wider">
-                              AI CFO
-                            </span>
-                            <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full bg-gradient-to-r from-blue-500/10 to-purple-500/10 text-blue-300 border border-blue-500/15">
-                              {currentPair.featureTitle}
-                            </span>
-                          </div>
-                          <p className="text-sm text-zinc-300 leading-relaxed">
-                            {answerText}
-                            <Cursor />
-                          </p>
-                        </div>
-                      </div>
-                    </motion.div>
-                  )}
-                </div>
-              )}
-            </AnimatePresence>
+              return null;
+            })}
           </div>
 
           {/* Input bar */}
@@ -460,25 +408,15 @@ export default function ChatFeatures() {
                 whileHover={{ scale: 1.1 }}
                 whileTap={{ scale: 0.9 }}
               >
-                <svg
-                  className="w-4 h-4 text-white"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-                  />
+                <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
                 </svg>
               </motion.div>
             </div>
           </div>
         </div>
 
-        {/* Ambient glow behind chat */}
+        {/* Ambient glow */}
         <div className="absolute -inset-8 -z-10">
           <div className="w-full h-full bg-blue-600/[0.04] rounded-3xl blur-[60px]" />
         </div>
